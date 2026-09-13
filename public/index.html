@@ -1167,6 +1167,10 @@ var altFetchTimer=null;
 var drawerExpanded=false;
 var drawerDragStartY=0,drawerDragStartExpanded=false;
 var favorites=[];
+
+function normalizeLongitude(lng){
+  return ((Number(lng)+180)%360+360)%360-180;
+}
 var favPanelOpen=false;
 
 /* ─── DOM refs ───────────────────────────────────────────── */
@@ -1238,7 +1242,7 @@ function scheduleElevation(){
 function onMapMove(){
   var c=map.getCenter();
   var w=(currentLayer==='osm'||currentLayer==='esri')?[c.lat,c.lng]:GCJ.g2w(c.lat,c.lng);
-  WGS={lat:w[0],lng:w[1]};
+  WGS={lat:w[0],lng:normalizeLongitude(w[1])};
   updateBubble();
   updateStatus();
   scheduleElevation();
@@ -1866,7 +1870,9 @@ handleAuthentication(function(activeToken) {
   fetch(API('/loc.json'))
     .then(function(r){return r.json();})
     .then(function(d){
-      WGS={lat:d.latitude||39.90872,lng:d.longitude||116.39748};
+      var initialLat=typeof d.latitude==='number'?d.latitude:39.90872;
+      var initialLng=typeof d.longitude==='number'?d.longitude:116.39748;
+      WGS={lat:initialLat,lng:normalizeLongitude(initialLng)};
       lockedWGS={lat:WGS.lat,lng:WGS.lng};
       altitude=d.altitude||null;
       hacc=d.horizontalAccuracy||39;
