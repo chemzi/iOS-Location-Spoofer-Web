@@ -451,6 +451,14 @@
     return Math.round(Number(deg) * 100000000);
   }
 
+  function normalizeLongitude(deg) {
+    var value = Number(deg);
+    if (!Number.isFinite(value)) {
+      throw new Error("Invalid longitude: " + deg);
+    }
+    return ((value + 180) % 360 + 360) % 360 - 180;
+  }
+
   // 最小改写 Location 子消息：仅替换已存在的 纬度(1)/经度(2)/水平精度(3)，原值透传其余所有字段
   function patchLocationRecord(locationBytes, config) {
     if (!locationBytes || locationBytes.length === 0) return locationBytes;
@@ -738,7 +746,7 @@
       }
     }
     cfg.latitude = Number(cfg.latitude);
-    cfg.longitude = Number(cfg.longitude);
+    cfg.longitude = normalizeLongitude(cfg.longitude);
     cfg.horizontalAccuracy = Number(cfg.horizontalAccuracy) || 39;
     cfg.verticalAccuracy = Number(cfg.verticalAccuracy) || 1000;
     cfg.altitude = Number(cfg.altitude) || 44;
@@ -865,7 +873,7 @@
       fetchRemoteConfig(config.configUrl, function (remoteData) {
         if (remoteData) {
           if (remoteData.latitude != null) config.latitude = Number(remoteData.latitude);
-          if (remoteData.longitude != null) config.longitude = Number(remoteData.longitude);
+          if (remoteData.longitude != null) config.longitude = normalizeLongitude(remoteData.longitude);
           if (remoteData.horizontalAccuracy != null) config.horizontalAccuracy = Number(remoteData.horizontalAccuracy);
           if (remoteData.verticalAccuracy != null) config.verticalAccuracy = Number(remoteData.verticalAccuracy);
           if (remoteData.altitude != null) config.altitude = Number(remoteData.altitude);
@@ -889,6 +897,7 @@
     ProtobufEngine: ProtobufEngine,
     ArpcCodec: ArpcCodec,
     coordToInt: coordToInt,
+    normalizeLongitude: normalizeLongitude,
     normalizeConfig: normalizeConfig,
     parseArgumentString: parseArgumentString,
     patchLocationRecord: patchLocationRecord,
