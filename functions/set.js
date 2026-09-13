@@ -8,6 +8,10 @@
 
 import { DEFAULT_LOC, authOk, jsonResponse, errorResponse, corsHeaders } from './_utils.js';
 
+function normalizeLongitude(longitude) {
+  return ((longitude + 180) % 360 + 360) % 360 - 180;
+}
+
 export async function onRequestPost(context) {
   const { request, env } = context;
 
@@ -25,7 +29,9 @@ export async function onRequestPost(context) {
 
     const updated = { ...current };
     if (typeof data.latitude           === 'number') updated.latitude           = data.latitude;
-    if (typeof data.longitude          === 'number') updated.longitude          = data.longitude;
+    if (typeof data.longitude          === 'number' && Number.isFinite(data.longitude)) {
+      updated.longitude = normalizeLongitude(data.longitude);
+    }
     if (typeof data.altitude           === 'number') updated.altitude           = data.altitude;
     if (typeof data.horizontalAccuracy === 'number') updated.horizontalAccuracy = data.horizontalAccuracy;
     if (typeof data.verticalAccuracy   === 'number') updated.verticalAccuracy   = data.verticalAccuracy;
