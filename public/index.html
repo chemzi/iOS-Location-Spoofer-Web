@@ -284,6 +284,8 @@ html.dark .config-code-box{background:rgba(0,0,0,0.35);color:var(--text);border-
   font-size:10px!important;
   color:var(--text-secondary)!important;
   border:1px solid var(--glass-light-border)!important;
+  margin-top:calc(var(--safe-top) + 180px)!important;
+  max-width:calc(100vw - 32px);
 }
 
 /* ═══════════════════════════════════════════════
@@ -400,6 +402,7 @@ html.dark .config-code-box{background:rgba(0,0,0,0.35);color:var(--text);border-
 }
 #search-input{
   flex:1;
+  min-width:0;
   height:44px;
   padding:0 16px;
   font-size:16px;font-weight:400;
@@ -413,6 +416,19 @@ html.dark .config-code-box{background:rgba(0,0,0,0.35);color:var(--text);border-
   transition:all 0.3s var(--bounce);
 }
 #search-input::placeholder{color:var(--text-secondary);}
+#search-scope{
+  height:44px;max-width:78px;padding:0 8px;flex-shrink:0;
+  color:var(--text);background:var(--glass-light);
+  border:1px solid var(--glass-light-border);border-radius:var(--r-sm);
+  box-shadow:var(--shadow-float);font:inherit;font-size:14px;
+}
+#map-status{
+  position:fixed;top:calc(var(--safe-top) + 252px);left:16px;right:72px;z-index:21;
+  padding:10px 12px;border:1px solid var(--glass-light-border);border-radius:var(--r-sm);
+  background:var(--glass-light);color:var(--text);font-size:12px;
+  backdrop-filter:var(--blur-md);box-shadow:var(--shadow-float);
+}
+#map-status button{margin-left:6px;border:0;background:none;color:var(--accent);font:inherit;cursor:pointer;}
 #search-input:focus{
   outline:none;
   background:var(--glass-light-hover);
@@ -942,13 +958,18 @@ html.dark #search-results::-webkit-scrollbar-thumb {
 
 <!-- Top search bar -->
 <div id="search-bar">
-  <input id="search-input" type="text" placeholder="搜索地点…" autocomplete="off" spellcheck="false">
+  <select id="search-scope" aria-label="搜索范围">
+    <option value="global">全球</option>
+    <option value="domestic">国内</option>
+  </select>
+  <input id="search-input" type="text" placeholder="地名 / English / 坐标" autocomplete="off" spellcheck="false">
   <button id="search-btn" aria-label="搜索">
     <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
   </button>
   <div id="search-history" class="hidden"></div>
 </div>
 <div id="search-results"></div>
+<div id="map-status" role="status" hidden>地图瓦片加载失败，请检查网络或<button id="map-switch-btn">切换图层</button></div>
 
 <!-- Overlay (for panels) -->
 <div id="overlay"></div>
@@ -976,7 +997,7 @@ html.dark #search-results::-webkit-scrollbar-thumb {
     高德卫星<span class="check">✓</span>
   </div>
   <div class="layer-item" data-layer="osm" id="layer-osm">
-    国际地图<span class="check">✓</span>
+    全球街道<span class="check">✓</span>
   </div>
   <div class="layer-item" data-layer="esri" id="layer-esri">
     国际卫星<span class="check">✓</span>
@@ -1159,7 +1180,14 @@ var GCJ = (function(){
 })();
 
 /* ─── State ──────────────────────────────────────────────── */
-var map, currentLayer=(AMAP_KEY?'amap':'osm');
+var LAYER_KEY='ios_loc_spoofer_layer',SCOPE_KEY='ios_loc_spoofer_scope';
+function readPreference(key,allowed,fallback){
+  var value=localStorage.getItem(key);
+  return allowed.indexOf(value)!==-1?value:fallback;
+}
+var map, currentLayer=readPreference(LAYER_KEY,['osm','esri','amap','sat'],'osm');
+var searchScope=readPreference(SCOPE_KEY,['global','domestic'],'global');
+var projectingPreview=false;
 var WGS={lat:39.90872,lng:116.39748}; // current center in WGS-84
 var lockedWGS=null;                   // last saved to server
 var altitude=null,hacc=39,vacc=1000;
@@ -1170,6 +1198,25 @@ var favorites=[];
 
 function normalizeLongitude(lng){
   return ((Number(lng)+180)%360+360)%360-180;
+}
+function projectWGS(lat,lng,layer){
+  return (layer==='osm'||layer==='esri')?[lat,normalizeLongitude(lng)]:GCJ.w2g(lat,normalizeLongitude(lng));
+}
+function refreshPreview(){
+  updateBubble();
+  updateStatus();
+  scheduleElevation();
+  updateFavStar();
+}
+function previewLocation(lat,lng,zoom){
+  map.stop();
+  WGS={lat:lat,lng:normalizeLongitude(lng)};
+  var display=projectWGS(WGS.lat,WGS.lng,currentLayer);
+  // Synchronous programmatic jumps retain the exact canonical WGS point.
+  projectingPreview=true;
+  map.setView(display,zoom,{animate:false});
+  projectingPreview=false;
+  refreshPreview();
 }
 var favPanelOpen=false;
 
@@ -1240,17 +1287,29 @@ function scheduleElevation(){
 
 /* ─── Map center → WGS-84 ────────────────────────────────── */
 function onMapMove(){
+  if(projectingPreview)return;
   var c=map.getCenter();
   var w=(currentLayer==='osm'||currentLayer==='esri')?[c.lat,c.lng]:GCJ.g2w(c.lat,c.lng);
   WGS={lat:w[0],lng:normalizeLongitude(w[1])};
-  updateBubble();
-  updateStatus();
-  scheduleElevation();
-  updateFavStar();
+  refreshPreview();
 }
 
 /* ─── Map setup ──────────────────────────────────────────── */
 var layers={};
+var tileStates={};
+function showTileStatus(){
+  $id('map-status').hidden=!(tileStates[currentLayer]||[]).some(function(state){return state.failed;});
+}
+function watchTiles(name,layer){
+  var state={errors:0,failed:false};
+  tileStates[name].push(state);
+  layer.on('loading',function(){state.errors=0;});
+  layer.on('tileerror',function(){state.errors++;});
+  layer.on('load',function(){
+    state.failed=state.errors>0;
+    if(name===currentLayer)showTileStatus();
+  });
+}
 function buildLayers(){
   layers.amap=L.tileLayer(
     'https://wprd0{s}.is.autonavi.com/appmaptile?x={x}&y={y}&z={z}&lang=zh_cn&size=1&scl=1&style=7',
@@ -1260,22 +1319,26 @@ function buildLayers(){
     L.tileLayer('https://wprd0{s}.is.autonavi.com/appmaptile?x={x}&y={y}&z={z}&lang=zh_cn&size=1&scl=1&style=8',{subdomains:'1234',maxZoom:19,attribution:'© 高德地图'})
   ]);
   layers.osm=L.tileLayer(
-    'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    {maxZoom:20,attribution:'© OpenStreetMap contributors, © CartoDB'});
+    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {maxZoom:20,maxNativeZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>'});
   layers.esri=L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     {maxZoom:19,attribution:'Tiles © Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'});
+  Object.keys(layers).forEach(function(name){
+    tileStates[name]=[];
+    if(name==='sat')layers[name].eachLayer(function(layer){watchTiles(name,layer);});
+    else watchTiles(name,layers[name]);
+  });
 }
 
 function initMap(lat,lng){
-  var dispLat,dispLng;
-  if(currentLayer==='osm'||currentLayer==='esri'){dispLat=lat;dispLng=lng;}
-  else{var g=GCJ.w2g(lat,lng);dispLat=g[0];dispLng=g[1];}
+  var display=projectWGS(lat,lng,currentLayer);
 
   map=L.map('map',{zoomControl:false,attributionControl:true});
+  map.attributionControl.setPosition('topleft');
   buildLayers();
   layers[currentLayer].addTo(map);
-  map.setView([dispLat,dispLng],13);
+  map.setView(display,13);
   map.on('move',onMapMove);
   map.on('moveend',onMapMove);
 
@@ -1291,16 +1354,18 @@ function initMap(lat,lng){
 
 /* ─── Layer switching ────────────────────────────────────── */
 function switchLayer(name){
-  if(name===currentLayer)return;
-  var c=map.getCenter();
-  // Convert current display coords → WGS-84 → new display coords
-  var wgs=(currentLayer==='osm'||currentLayer==='esri')?[c.lat,c.lng]:GCJ.g2w(c.lat,c.lng);
-  var newDisp=(name==='osm'||name==='esri')?wgs:GCJ.w2g(wgs[0],wgs[1]);
+  if(!Object.prototype.hasOwnProperty.call(layers,name))return;
+  localStorage.setItem(LAYER_KEY,name);
+  if(name===currentLayer){$id('layer-menu').style.display='none';return;}
+  var target={lat:WGS.lat,lng:WGS.lng};
+  projectingPreview=true;
 
   map.removeLayer(layers[currentLayer]);
   currentLayer=name;
   layers[name].addTo(map);
-  map.setView([newDisp[0],newDisp[1]],map.getZoom(),{animate:false});
+  previewLocation(target.lat,target.lng,map.getZoom());
+  if(lockedWGS)updateLockedPin(lockedWGS.lat,lockedWGS.lng);
+  showTileStatus();
 
   // Update UI
   document.querySelectorAll('.layer-item').forEach(function(el){
@@ -1310,7 +1375,9 @@ function switchLayer(name){
 }
 
 /* ─── Search ─────────────────────────────────────────────── */
-var searchDebounce=null;
+var searchGeneration=0;
+var searchController=null;
+var nextSearchAt=0;
 var searchHistory = [];
 var HISTORY_KEY = 'ios_loc_spoofer_history';
 
@@ -1361,6 +1428,9 @@ window.clearHistory = function(e) {
 function doSearch(){
   var q=$id('search-input').value.trim();
   if(!q)return;
+  var generation=++searchGeneration;
+  if(searchController)searchController.abort();
+  searchController=null;
   saveHistory(q);
   $id('search-input').blur(); // 取消焦点
   $id('search-history').classList.add('hidden'); // 隐藏历史记录下拉
@@ -1371,8 +1441,7 @@ function doSearch(){
   if(coordMatch){
     var cLat=parseFloat(coordMatch[1]),cLng=parseFloat(coordMatch[2]);
     if(cLat>=-90&&cLat<=90&&cLng>=-180&&cLng<=180){
-      var disp=(currentLayer==='osm'||currentLayer==='esri')?[cLat,cLng]:GCJ.w2g(cLat,cLng);
-      map.setView([disp[0],disp[1]],16,{animate:true});
+      previewLocation(cLat,cLng,16);
       $id('search-results').style.display='none';
       $id('search-input').value='';
       toast('已跳转到坐标 '+cLat.toFixed(5)+', '+cLng.toFixed(5));
@@ -1380,70 +1449,82 @@ function doSearch(){
     }
   }
   var box=$id('search-results');
+  var wait=Math.ceil((nextSearchAt-Date.now())/1000);
+  if(wait>0){
+    box.innerHTML='<div class="result-row"><span class="name">请等待 '+wait+' 秒后再搜索</span></div>';
+    box.style.display='block';
+    return;
+  }
   box.innerHTML='<div class="result-row"><span class="name">搜索中…</span></div>';
   box.style.display='block';
 
-  if (AMAP_KEY) {
-    fetch('https://restapi.amap.com/v3/assistant/inputtips?keywords='+encodeURIComponent(q)+'&key='+AMAP_KEY)
-      .then(function(r){return r.json();})
-      .then(function(d){
-        box.innerHTML='';
-        if(d.status !== '1' || !d.tips || !d.tips.length){
-          box.innerHTML='<div class="result-row"><span class="name">未找到结果</span></div>';
-          return;
+  var searchUrl=new URL(API('/search'),window.location.origin);
+  searchUrl.searchParams.set('q',q);
+  searchUrl.searchParams.set('scope',searchScope);
+  nextSearchAt=Date.now()+1000;
+  searchController=new AbortController();
+  fetch(searchUrl.toString(),{signal:searchController.signal})
+    .then(function(r){
+      return r.json().then(function(d){
+        if(!r.ok){
+          if(r.status===429&&generation===searchGeneration){
+            var retry=r.headers.get('Retry-After');
+            var seconds=Number(retry);
+            var until=Number.isFinite(seconds)&&seconds>0?Date.now()+seconds*1000:Date.parse(retry);
+            if(Number.isFinite(until))nextSearchAt=Math.max(nextSearchAt,until);
+          }
+          var messages={401:'登录已失效，请刷新后重新登录',400:'请检查搜索词与搜索范围',429:'搜索过于频繁，请稍后重试',502:'搜索服务暂不可用，请稍后重试',504:'搜索超时，请稍后重试'};
+          var error=new Error(d.message||messages[r.status]||'搜索失败，请重试');
+          error.searchFailure=true;
+          throw error;
         }
-        d.tips.forEach(function(it){
-          if (!it.location || typeof it.location !== 'string') return;
-          var row=document.createElement('div');row.className='result-row';
-          var locParts = it.location.split(',');
-          var gcjLng = parseFloat(locParts[0]);
-          var gcjLat = parseFloat(locParts[1]);
-          row.innerHTML='<div class="name">'+escHtml(it.name)+'</div>'
-                       +'<div class="sub">'+escHtml((it.district || '') + (it.address || ''))+'</div>';
-          row.addEventListener('click',function(){
-            var disp = (currentLayer === 'osm'||currentLayer === 'esri') ? GCJ.g2w(gcjLat, gcjLng) : [gcjLat, gcjLng];
-            map.setView([disp[0], disp[1]], 16, {animate:true});
-            box.style.display='none';
-            $id('search-input').value='';
-          });
-          box.appendChild(row);
-        });
-        if (!box.children.length) {
-          box.innerHTML='<div class="result-row"><span class="name">无有效定位结果</span></div>';
-        }
-      }).catch(function(){
-        box.innerHTML='<div class="result-row"><span class="name">搜索失败，请重试</span></div>';
+        return d;
       });
-  } else {
-    fetch('https://nominatim.openstreetmap.org/search?format=json&limit=6&q='+encodeURIComponent(q))
-      .then(function(r){return r.json();})
-      .then(function(a){
-        box.innerHTML='';
-        if(!a||!a.length){
-          box.innerHTML='<div class="result-row"><span class="name">未找到结果 (国内搜索建议配置高德 Key)</span></div>';
-          return;
-        }
-        a.forEach(function(it){
-          var row=document.createElement('div');row.className='result-row';
-          var parts=it.display_name.split(',');
-          row.innerHTML='<div class="name">'+parts[0]+'</div>'
-                       +'<div class="sub">'+parts.slice(1,3).join(',')+'</div>';
-          row.addEventListener('click',function(){
-            var wLat=+it.lat,wLng=+it.lon;
-            var disp=(currentLayer==='osm'||currentLayer==='esri')?[wLat,wLng]:GCJ.w2g(wLat,wLng);
-            map.setView([disp[0], disp[1]], 16, {animate:true});
-            box.style.display='none';
-            $id('search-input').value='';
-          });
-          box.appendChild(row);
+    })
+    .then(function(d){
+      if(generation!==searchGeneration)return;
+      box.innerHTML='';
+      if(!d.results||!d.results.length){
+        var hint=searchScope==='global'?'请尝试更具体的当地文字或英文（如 Shibuya Tokyo），也可输入纬度, 经度':'请尝试更具体的国内地名，也可输入纬度, 经度';
+        box.innerHTML='<div class="result-row"><div class="name">未找到结果</div><div class="sub">'+hint+'</div></div>';
+        return;
+      }
+      d.results.slice(0,6).forEach(function(it){
+        var row=document.createElement('div');row.className='result-row';
+        var context=[it.country,it.locality,it.provider||d.provider].filter(Boolean).join(' · ');
+        row.innerHTML='<div class="name">'+escHtml(it.name||it.label)+'</div>'
+                     +'<div class="sub">'+escHtml(context)+'</div>';
+        row.addEventListener('click',function(){
+          previewLocation(it.latitude,it.longitude,16);
+          box.style.display='none';
+          $id('search-input').value='';
         });
-      }).catch(function(){
-        box.innerHTML='<div class="result-row"><span class="name">搜索失败，请重试</span></div>';
+        box.appendChild(row);
       });
-  }
+    }).catch(function(err){
+      if(generation!==searchGeneration||err.name==='AbortError')return;
+      var message=err.searchFailure?err.message:'搜索失败，请检查网络后重试';
+      box.innerHTML='<div class="result-row"><span class="name">'+escHtml(message)+'</span></div>';
+    }).finally(function(){
+      if(generation===searchGeneration)searchController=null;
+    });
 }
 $id('search-btn').addEventListener('click',doSearch);
 $id('search-input').addEventListener('keydown',function(e){if(e.key==='Enter')doSearch();});
+function updateSearchScope(){
+  $id('search-scope').value=searchScope;
+  $id('search-input').placeholder=searchScope==='global'?'地名 / English / 坐标':'国内地名 / 坐标';
+}
+updateSearchScope();
+$id('search-scope').addEventListener('change',function(){
+  searchScope=$id('search-scope').value;
+  localStorage.setItem(SCOPE_KEY,searchScope);
+  searchGeneration++;
+  if(searchController)searchController.abort();
+  searchController=null;
+  $id('search-results').style.display='none';
+  updateSearchScope();
+});
 $id('search-input').addEventListener('focus', function() {
   if(searchHistory.length > 0) {
     $id('search-history').classList.remove('hidden');
@@ -1495,7 +1576,7 @@ elBtnLock.addEventListener('click',lockLocation);
 /* ─── Locked position pin ────────────────────────── */
 var lockedMarker = null;
 function updateLockedPin(lat, lng) {
-  var disp = (currentLayer==='osm'||currentLayer==='esri') ? [lat, lng] : GCJ.w2g(lat, lng);
+  var disp=projectWGS(lat,lng,currentLayer);
   var pinHtml = '<div class="locked-pin"><div class="locked-pin-inner"></div><div class="locked-pin-dot"></div></div>';
   var icon = L.divIcon({ html: pinHtml, className: '', iconSize: [28, 36], iconAnchor: [14, 36] });
   if (lockedMarker) {
@@ -1589,8 +1670,7 @@ function renderFavorites(){
     // Jump to location on tap
     item.addEventListener('click',function(e){
       if(e.target.classList.contains('fav-del'))return;
-      var disp=currentLayer==='osm'?[f.latitude,f.longitude]:GCJ.w2g(f.latitude,f.longitude);
-      map.setView([disp[0],disp[1]],15,{animate:true});
+      previewLocation(f.latitude,f.longitude,15);
       closeFavPanel();
     });
 
@@ -1652,8 +1732,7 @@ $id('btn-locate').addEventListener('click', function(e){
     navigator.geolocation.getCurrentPosition(function(pos) {
       var lat = pos.coords.latitude;
       var lng = pos.coords.longitude;
-      var disp = (currentLayer === 'osm'||currentLayer === 'esri') ? [lat, lng] : GCJ.w2g(lat, lng);
-      map.setView([disp[0], disp[1]], 16, {animate: true});
+      previewLocation(lat,lng,16);
       toast('已定位到当前真实位置');
     }, function(err) {
       toast('定位失败: ' + err.message);
@@ -1704,6 +1783,10 @@ function saveFavorite(){
 }
 
 /* Layer menu */
+$id('map-switch-btn').addEventListener('click',function(e){
+  e.stopPropagation();
+  $id('layer-menu').style.display='block';
+});
 $id('layer-btn').addEventListener('click',function(e){
   e.stopPropagation();
   var m=$id('layer-menu');
@@ -1900,10 +1983,6 @@ handleAuthentication(function(activeToken) {
       toast('无法连接服务器，请检查 Token');
     });
 });
-
-if (!AMAP_KEY) {
-  $id('search-input').placeholder = '搜索地点 (国内搜索建议配置高德 Key)';
-}
 
 })();
 </script>
