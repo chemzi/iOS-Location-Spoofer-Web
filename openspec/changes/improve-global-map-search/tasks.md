@@ -20,4 +20,4 @@
 ## 4. Delivery
 
 - [x] 4.1 Update user-facing provider/setup notes, including public-service limits, global query language hints and no new Shadowrocket setup; publish a reviewable feature PR with actual verification and remaining device/network gaps.
-- [ ] 4.2 When authorized to deploy, merge the approved PR, verify Cloudflare Pages and stable-site assets, and report production acceptance separately from unavailable physical-device checks. Preserve a concrete revert path; do not delete production data or caches.
+- [x] 4.2 When authorized to deploy, merge the approved PR, verify Cloudflare Pages and stable-site assets, and report production acceptance separately from unavailable physical-device checks. Preserve a concrete revert path; do not delete production data or caches.
